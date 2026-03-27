@@ -3,6 +3,11 @@ if not lib then return end
 local CraftingBenches = {}
 local Items = require 'modules.items.client'
 local createBlip = require 'modules.utils.client'.CreateBlip
+local Utils = require 'modules.utils.client'
+local prompt = {
+    options = { icon = 'fa-wrench' },
+    message = ('**%s**  \n%s'):format(locale('open_crafting_bench'), locale('interact_prompt', GetControlInstructionalButton(0, 38, true):sub(3)))
+}
 
 ---@param id number
 ---@param data table
@@ -37,14 +42,14 @@ local function createCraftingBench(id, data)
             if data.zones then
     			for i = 1, #data.zones do
     				local zone = data.zones[i]
-    				zone.name = ("craftingbench_%s:%s"):format(id, i)
+    				zone.name = ('craftingbench_%s:%s'):format(id, i)
     				zone.id = id
     				zone.index = i
     				zone.options = {
-    					{
+						{
     						label = zone.label or locale('open_crafting_bench'),
-    						canInteract = data.groups and function()
-    							return client.hasGroup(data.groups)
+    						canInteract = (zone.groups or data.groups) and function()
+    							return client.hasGroup(zone.groups or data.groups)
     						end or nil,
     						onSelect = function()
     							client.openInventory('crafting', { id = id, index = i })
@@ -64,16 +69,6 @@ local function createCraftingBench(id, data)
 		elseif data.points then
 			data.zones = nil
 
-			---@param point CPoint
-			local function nearbyBench(point)
-				---@diagnostic disable-next-line: param-type-mismatch
-				DrawMarker(2, point.coords.x, point.coords.y, point.coords.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.2, 0.15, 150, 150, 30, 222, false, false, 0, true, false, false, false)
-
-				if point.isClosest and point.currentDistance < 1.2 and IsControlJustReleased(0, 38) then
-					client.openInventory('crafting', { id = point.benchid, index = point.index })
-				end
-			end
-
 			for i = 1, #data.points do
 				local coords = data.points[i]
 
@@ -83,7 +78,9 @@ local function createCraftingBench(id, data)
 					benchid = id,
 					index = i,
 					inv = 'crafting',
-					nearby = nearbyBench
+                    prompt = prompt,
+                    marker = client.craftingmarker,
+					nearby = Utils.nearbyMarker
 				})
 
 				if blip then
@@ -96,6 +93,6 @@ local function createCraftingBench(id, data)
 	end
 end
 
-for id, data in pairs(lib.load('data.crafting')) do createCraftingBench(id, data) end
+for id, data in pairs(lib.load('data.crafting') or {}) do createCraftingBench(data.name or id, data) end
 
 return CraftingBenches

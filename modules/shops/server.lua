@@ -2,6 +2,7 @@ if not lib then return end
 
 local Items = require 'modules.items.server'
 local Inventory = require 'modules.inventory.server'
+local TriggerEventHooks = require 'modules.hooks.server'
 local Shops = {}
 local locations = shared.target and 'targets' or 'locations'
 
@@ -91,7 +92,6 @@ local function createShop(shopType, id)
         coords = store
     end
 
-	---@type OxShop
 	shop[id] = {
 		label = shop.name,
 		id = shopType..' '..id,
@@ -108,7 +108,7 @@ local function createShop(shopType, id)
 	return shop[id]
 end
 
-for shopType, shopDetails in pairs(lib.load('data.shops')) do
+for shopType, shopDetails in pairs(lib.load('data.shops') or {}) do
 	registerShopType(shopType, shopDetails)
 end
 
@@ -119,9 +119,9 @@ exports('RegisterShop', function(shopType, shopDetails)
 end)
 
 lib.callback.register('ox_inventory:openShop', function(source, data)
-	local left, shop = Inventory(source)
+	local playerInv, shop = Inventory(source)
 
-	if not left then return end
+	if not playerInv then return end
 
 	if data then
 		shop = Shops[data.type]
@@ -137,7 +137,7 @@ lib.callback.register('ox_inventory:openShop', function(source, data)
 		---@cast shop OxShop
 
 		if shop.groups then
-			local group = server.hasGroup(left, shop.groups)
+			local group = server.hasGroup(playerInv, shop.groups)
 			if not group then return end
 		end
 
@@ -145,16 +145,32 @@ lib.callback.register('ox_inventory:openShop', function(source, data)
 			return
 		end
 
+		local shopType, shopId = shop.id:match('^(.-) (%d-)$')
+
+        local hookPayload = {
+            source = source,
+            shopId = shopId,
+			shopType = shopType,
+            label = shop.label,
+            slots = shop.slots,
+            items = shop.items,
+            groups = shop.groups,
+            coords = shop.coords,
+            distance = shop.distance
+        }
+
+        if not TriggerEventHooks('openShop', hookPayload) then return end
+
 		---@diagnostic disable-next-line: assign-type-mismatch
-		left:openInventory(left)
-		left.currentShop = shop.id
+		playerInv:openInventory(playerInv)
+		playerInv.currentShop = shop.id
 	end
 
-	return { label = left.label, type = left.type, slots = left.slots, weight = left.weight, maxWeight = left.maxWeight }, shop
+	return { label = playerInv.label, type = playerInv.type, slots = playerInv.slots, weight = playerInv.weight, maxWeight = playerInv.maxWeight }, shop
 end)
 
 local function canAffordItem(inv, currency, price)
-	local canAfford = price >= 0 and Inventory.GetItem(inv, currency, false, true) >= price
+	local canAfford = price >= 0 and Inventory.GetItemCount(inv, currency) >= price
 
 	return canAfford or {
 		type = 'error',
@@ -165,8 +181,6 @@ end
 local function removeCurrency(inv, currency, price)
 	Inventory.RemoveItem(inv, currency, price)
 end
-
-local TriggerEventHooks = require 'modules.hooks.server'
 
 local function isRequiredGrade(grade, rank)
 	if type(grade) == "table" then
@@ -249,6 +263,7 @@ lib.callback.register('ox_inventory:buyItem', function(source, data)
 					shopId = shopId,
 					toInventory = playerInv.id,
 					toSlot = data.toSlot,
+					fromSlot = fromData,
 					itemName = fromData.name,
 					metadata = metadata,
 					count = count,
@@ -267,7 +282,7 @@ lib.callback.register('ox_inventory:buyItem', function(source, data)
 
 				if server.syncInventory then server.syncInventory(playerInv) end
 
-				local message = locale('purchased_for', count, fromItem.label, (currency == 'money' and locale('$') or math.groupdigits(price)), (currency == 'money' and math.groupdigits(price) or ' '..Items(currency).label))
+				local message = locale('purchased_for', count, metadata?.label or fromItem.label, (currency == 'money' and locale('$') or math.groupdigits(price)), (currency == 'money' and math.groupdigits(price) or ' '..Items(currency).label))
 
 				if server.loglevel > 0 then
 					if server.loglevel > 1 or fromData.price >= 500 then

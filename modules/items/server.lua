@@ -10,15 +10,12 @@ Items.containers = require 'modules.items.containers'
 
 -- Possible metadata when creating garbage
 local trash = {
-	{description = 'An old rolled up newspaper.', weight = 200, image = 'trash_newspaper'},
-	{description = 'A discarded burger shot carton.', weight = 50, image = 'trash_burgershot'},
+	{description = 'A discarded burger carton.', weight = 50, image = 'trash_burger'},
 	{description = 'An empty soda can.', weight = 20, image = 'trash_can'},
 	{description = 'A mouldy piece of bread.', weight = 70, image = 'trash_bread'},
-	{description = 'An empty ciggarette carton.', weight = 10, image = 'trash_fags'},
-	{description = 'A slightly used pair of panties.', weight = 20, image = 'panties'},
-	{description = 'An empty coffee cup.', weight = 20, image = 'trash_coffee'},
-	{description = 'A crumpled up piece of paper.', weight = 5, image = 'trash_paper'},
 	{description = 'An empty chips bag.', weight = 5, image = 'trash_chips'},
+	{description = 'A slightly used pair of panties.', weight = 20, image = 'panties'},
+	{description = 'An old rolled up newspaper.', weight = 200, image = 'WEAPON_ACIDPACKAGE'},
 }
 
 ---@param _ table?
@@ -53,6 +50,8 @@ local Inventory
 
 CreateThread(function()
 	Inventory = require 'modules.inventory.server'
+
+    if not lib then return end
 
 	if shared.framework == 'esx' then
 		local success, items = pcall(MySQL.query.await, 'SELECT * FROM items')
@@ -111,109 +110,6 @@ CreateThread(function()
 			end
 
 			shared.info('Database contains', #items, 'items.')
-		end
-
-		Wait(500)
-
-	elseif shared.framework == 'qb' then
-		local QBCore = exports['qb-core']:GetCoreObject()
-		local items = QBCore.Shared.Items
-
-		if items and table.type(items) ~= 'empty' then
-			local dump = {}
-			local count = 0
-			local ignoreList = {
-				"weapon_",
-				"pistol_",
-				"pistol50_",
-				"revolver_",
-				"smg_",
-				"combatpdw_",
-				"shotgun_",
-				"rifle_",
-				"carbine_",
-				"gusenberg_",
-				"sniper_",
-				"snipermax_",
-				"tint_",
-				"_ammo"
-			}
-
-			local function checkIgnoredNames(name)
-				for i = 1, #ignoreList do
-					if string.find(name, ignoreList[i]) then
-						return true
-					end
-				end
-				return false
-			end
-
-			for k, item in pairs(items) do
-				-- Explain why this wouldn't be table to me, because numerous people have been getting "attempted to index number" here
-				if type(item) == 'table' then
-					-- Some people don't assign the name property, but it seemingly always matches the index anyway.
-					if not item.name then item.name = k end
-
-					if not ItemList[item.name] and not checkIgnoredNames(item.name) then
-						item.close = item.shouldClose == nil and true or item.shouldClose
-						item.stack = not item.unique and true
-						item.description = item.description
-						item.weight = item.weight or 0
-						dump[k] = item
-						count += 1
-					end
-				end
-			end
-
-			if table.type(dump) ~= 'empty' then
-				local file = {string.strtrim(LoadResourceFile(shared.resource, 'data/items.lua'))}
-				file[1] = file[1]:gsub('}$', '')
-
-				---@todo separate into functions for reusability, properly handle nil values
-				local itemFormat = [[
-
-	[%q] = {
-		label = %q,
-		weight = %s,
-		stack = %s,
-		close = %s,
-		description = %q,
-		client = {
-			status = {
-				hunger = %s,
-				thirst = %s,
-				stress = %s
-			},
-			image = %q,
-		}
-	},
-]]
-
-				local fileSize = #file
-
-				for _, item in pairs(dump) do
-					if not ItemList[item.name] then
-						fileSize += 1
-
-						---@todo cry
-						local itemStr = itemFormat:format(item.name, item.label, item.weight, item.stack, item.close, item.description or 'nil', item.hunger or 'nil', item.thirst or 'nil', item.stress or 'nil', item.image or 'nil')
-						-- temporary solution for nil values
-						itemStr = itemStr:gsub('[%s]-[%w]+ = "?nil"?,?', '')
-						-- temporary solution for empty status table
-						itemStr = itemStr:gsub('[%s]-[%w]+ = %{[%s]+%},?', '')
-						-- temporary solution for empty client table
-						itemStr = itemStr:gsub('[%s]-[%w]+ = %{[%s]+%},?', '')
-						file[fileSize] = itemStr
-						ItemList[item.name] = item
-					end
-				end
-
-				file[fileSize+1] = '}'
-
-				SaveResourceFile(shared.resource, 'data/items.lua', table.concat(file), -1)
-				shared.info(count, 'items have been copied from the QBCore.Shared.Items.')
-				shared.info('You should restart the resource to load the new items.')
-			end
 		end
 
 		Wait(500)
@@ -279,7 +175,9 @@ function Items.Metadata(inv, item, metadata, count)
 
 	if item.weapon then
 		if type(metadata) ~= 'table' then metadata = {} end
-		if not metadata.durability then metadata.durability = 100 end
+		if not metadata.durability then 
+			metadata = setItemDurability(item, metadata)
+		end
 		if not metadata.ammo and item.ammoname then metadata.ammo = 0 end
 		if not metadata.components then metadata.components = {} end
 
@@ -438,6 +336,8 @@ function Items.UpdateDurability(inv, slot, item, value, ostime)
     }, true)
 end
 
+---@deprecated
+---Use the 'ox_inventory:usedItem' event or the 'usingItem' or 'buyItem' hooks
 local function Item(name, cb)
 	local item = ItemList[name]
 
@@ -449,33 +349,24 @@ end
 -----------------------------------------------------------------------------------------------
 -- Serverside item functions
 -----------------------------------------------------------------------------------------------
-Item('box_pizza_chs', function(event, item, inventory, data, slot)
-	if event == 'usedItem' then
-    	Inventory.AddItem(inventory, 'pizza_chs', 8)
-	end
-end)
 
-Item('box_pizza_pep', function(event, item, inventory, data, slot)
-	if event == 'usedItem' then
-    	Inventory.AddItem(inventory, 'pizza_pep', 8)
-	end
-end)
+-- Item('testburger', function(event, item, inventory, slot, data)
+-- 	if event == 'usingItem' then
+-- 		if Inventory.GetItem(inventory, item, inventory.items[slot].metadata, true) > 0 then
+-- 			-- if we return false here, we can cancel item use
+-- 			return {
+-- 				inventory.label, event, 'external item use poggies'
+-- 			}
+-- 		end
 
-Item('box_pizza_msh', function(event, item, inventory, data, slot)
-	if event == 'usedItem' then
-    	Inventory.AddItem(inventory, 'pizza_msh', 8)
-	end
-end)
+-- 	elseif event == 'usedItem' then
+-- 		print(('%s just ate a %s from slot %s'):format(inventory.label, item.label, slot))
 
-Item('box_pizza_mgt', function(event, item, inventory, data, slot)
-	if event == 'usedItem' then
-    	Inventory.AddItem(inventory, 'pizza_mgt', 8)
-	end
-end)
+-- 	elseif event == 'buying' then
+-- 		print(data.id, data.coords, json.encode(data.items[slot], {indent=true}))
+-- 	end
+-- end)
 
-Item('box_pizza_dmt', function(event, item, inventory, data, slot)
-	if event == 'usedItem' then
-    	Inventory.AddItem(inventory, 'pizza_dmt', 8)
-	end
-end)
+-----------------------------------------------------------------------------------------------
+
 return Items

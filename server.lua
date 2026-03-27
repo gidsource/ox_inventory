@@ -1,19 +1,18 @@
 if not lib then return end
 
-if GetConvar('inventory:versioncheck', 'true') == 'true' then
-	lib.versionCheck('overextended/ox_inventory')
-end
-
 require 'modules.bridge.server'
+require 'modules.crafting.server'
+require 'modules.shops.server'
 require 'modules.pefcl.server'
+
+if GetConvar('inventory:versioncheck', 'true') == 'true' then
+	lib.versionCheck('communityox/ox_inventory')
+end
 
 local TriggerEventHooks = require 'modules.hooks.server'
 local db = require 'modules.mysql.server'
 local Items = require 'modules.items.server'
 local Inventory = require 'modules.inventory.server'
-
-require 'modules.crafting.server'
-require 'modules.shops.server'
 
 ---@param player table
 ---@param data table?
@@ -29,7 +28,7 @@ function server.setPlayerInventory(player, data)
 	local inventory = {}
 	local totalWeight = 0
 
-	if data and next(data) then
+	if type(data) == 'table' then
 		local ostime = os.time()
 
 		for _, v in pairs(data) do
@@ -68,14 +67,34 @@ end
 exports('setPlayerInventory', server.setPlayerInventory)
 AddEventHandler('ox_inventory:setPlayerInventory', server.setPlayerInventory)
 
----@param playerPed number
----@param coordinates vector3|vector3[]
----@param distance? number
----@return vector3|false
-local function getClosestStashCoords(playerPed, coordinates, distance)
-	local playerCoords = GetEntityCoords(playerPed)
+local registeredDumpsters = {}
 
-	if not distance then distance = 10 end
+---@param coords vector3
+---@return string?
+local function getDumpsterFromCoords(coords)
+	local found
+
+	for i = 1, #registeredDumpsters do
+		local distance = #(coords - registeredDumpsters[i])
+
+		if distance < 0.1 then
+			found = i
+			break
+		end
+	end
+
+	return found
+end
+
+---@param playerPed number
+---@param stash OxInventory
+---@return vector3?
+local function getClosestStashCoords(playerPed, stash)
+	local playerCoords = GetEntityCoords(playerPed)
+	local distance = stash.distance or 10
+    local coordinates = stash.coords
+
+    if not coordinates then return end
 
 	if type(coordinates) == 'table' then
 		for i = 1, #coordinates do
@@ -86,23 +105,24 @@ local function getClosestStashCoords(playerPed, coordinates, distance)
 			end
 		end
 
-		return false
+		return
 	end
 
-	return #(coordinates - playerCoords) < distance and coordinates
+	return #(coordinates - playerCoords) < distance and coordinates or nil
 end
 
 ---@param source number
 ---@param invType string
 ---@param data? string|number|table
 ---@param ignoreSecurityChecks boolean?
----@return boolean|table|nil
----@return table?
+---@return table | false | nil, table | false | nil, string?
 local function openInventory(source, invType, data, ignoreSecurityChecks)
 	if Inventory.Lock then return false end
 
-	local left = Inventory(source) --[[@as OxInventory]]
+	local left = Inventory(source)
 	local right, closestCoords
+
+    if not left then return end
 
     left:closeInventory(true)
 	Inventory.CloseAll(left, source)
@@ -111,33 +131,89 @@ local function openInventory(source, invType, data, ignoreSecurityChecks)
         data = nil
     end
 
+    local playerPed = left.player.ped
+
 	if data then
+        local isDataTable = type(data) == 'table'
+
 		if invType == 'stash' then
-			right = Inventory(data, left)
+			right = Inventory(data, left, ignoreSecurityChecks)
 			if right == false then return false end
-		elseif type(data) == 'table' then
+		elseif isDataTable then
 			if data.netid then
+                local entity = NetworkGetEntityFromNetworkId(data.netid)
+
+                if not entity then return end
+
+                if not ignoreSecurityChecks then
+                    if #(GetEntityCoords(playerPed) - GetEntityCoords(entity)) > 16 then return end
+                end
+
+                if invType == 'glovebox' then
+                    if not ignoreSecurityChecks and GetVehiclePedIsIn(playerPed, false) ~= entity then
+                        return
+                    end
+                end
+
+                if invType == 'trunk' then
+                    local lockStatus = ignoreSecurityChecks and 0 or GetVehicleDoorLockStatus(entity)
+
+                    -- 0: no lock; 1: unlocked; 8: boot unlocked
+                    if lockStatus > 1 and lockStatus ~= 8 then
+                        return false, false, 'vehicle_locked'
+                    end
+                end
+
+                local plate = (invType == 'glovebox' or invType == 'trunk') and GetVehicleNumberPlateText(entity)
+
+                if plate then
+                    if server.trimplate then plate = string.strtrim(plate) end
+
+                    if not data.id  then
+                        data.id = (invType == 'glovebox' and 'glove' or 'trunk') .. plate
+                    end
+                end
+
 				data.type = invType
 				right = Inventory(data)
+
+				if right and data.netid ~= right.netid then
+					local invEntity = NetworkGetEntityFromNetworkId(right.netid)
+
+					if not (invEntity > 0 and DoesEntityExist(invEntity)) or (plate and not string.match(GetVehicleNumberPlateText(invEntity) or '', plate)) then
+						Inventory.Remove(right)
+						right = Inventory(data)
+					end
+				end
 			elseif invType == 'drop' then
 				right = Inventory(data.id)
 			else
 				return
 			end
 		elseif invType == 'policeevidence' then
-			if server.hasGroup(left, shared.police) then
+			if ignoreSecurityChecks or server.hasGroup(left, shared.police) then
 				right = Inventory(('evidence-%s'):format(data))
 			end
 		elseif invType == 'dumpster' then
-			right = Inventory(data)
+			if shared.networkdumpsters then
+				local dumpsterId = getDumpsterFromCoords(data)
+				right = dumpsterId and Inventory(('dumpster-%s'):format(dumpsterId))
 
-			if not right then
-				local netid = tonumber(data:sub(9))
+				if not right then
+					dumpsterId = #registeredDumpsters + 1
+					right = Inventory.Create(('dumpster-%s'):format(dumpsterId), locale('dumpster'), invType, 15, 0, 100000, false)
+					registeredDumpsters[dumpsterId] = data
+				end
+			else
+				---@cast data string
+				right = Inventory(data)
 
-				-- dumpsters do not work with entity lockdown. need to rewrite, but having to do
-				-- distance checks to some ~7000 dumpsters and freeze the entities isn't ideal
-				if netid and NetworkGetEntityFromNetworkId(netid) > 0 then
-					right = Inventory.Create(data, locale('dumpster'), invType, 15, 0, 100000, false)
+				if not right then
+					local netid = tonumber(data:sub(9))
+
+					if netid and NetworkGetEntityFromNetworkId(netid) > 0 then
+						right = Inventory.Create(data, locale('dumpster'), invType, 15, 0, 100000, false)
+					end
 				end
 			end
 		elseif invType == 'container' then
@@ -155,6 +231,13 @@ local function openInventory(source, invType, data, ignoreSecurityChecks)
 
 		if not right then return end
 
+        -- Security check to make sure the requested inventory type is the same as the found inventory
+        -- Only case where a missmatch is tolerated is for temporary stashes
+        if right.type ~= invType and not (right.type == 'temp' and invType == 'stash') then
+            DropPlayer(source, 'sussy')
+            return
+        end
+
 		if not ignoreSecurityChecks and right.groups and not server.hasGroup(left, right.groups) then return end
 
 		local hookPayload = {
@@ -164,6 +247,7 @@ local function openInventory(source, invType, data, ignoreSecurityChecks)
 		}
 
 		if invType == 'container' then hookPayload.slot = left.containerSlot end
+		if isDataTable and data.netid then hookPayload.netId = data.netid end
 
 		if not TriggerEventHooks('openInventory', hookPayload) then return end
 
@@ -176,7 +260,7 @@ local function openInventory(source, invType, data, ignoreSecurityChecks)
 		end
 
 		if not ignoreSecurityChecks and right.coords then
-			closestCoords = getClosestStashCoords(left.player.ped, right.coords)
+			closestCoords = getClosestStashCoords(playerPed, right)
 
 			if not closestCoords then return end
 		end
@@ -210,7 +294,21 @@ end
 ---@param invType string
 ---@param data string|number|table
 lib.callback.register('ox_inventory:openInventory', function(source, invType, data)
-	return openInventory(source, invType, data)
+    if invType == 'player' and source ~= data then
+        local serverId = type(data) == 'table' and data.id or data
+
+        if source == serverId or type(serverId) ~= 'number' then return end
+
+        local left = Inventory(source)
+        if not left then return end
+
+        local isPolice = server.hasGroup(left, shared.police)
+        local isTargetStealable = Player(serverId).state.canSteal
+
+        if not isPolice and not isTargetStealable then return end
+    end
+
+    return openInventory(source, invType, data)
 end)
 
 ---@param netId number
@@ -223,14 +321,16 @@ end)
 ---@param playerId number
 ---@param invType string
 ---@param data string|number|table
-exports('forceOpenInventory', function(playerId, invType, data)
+function server.forceOpenInventory(playerId, invType, data)
 	local left, right = openInventory(playerId, invType, data, true)
 
 	if left and right then
 		TriggerClientEvent('ox_inventory:forceOpenInventory', playerId, left, right)
 		return right.id
 	end
-end)
+end
+
+exports('forceOpenInventory', server.forceOpenInventory)
 
 local Licenses = lib.load('data.licenses')
 
@@ -246,7 +346,7 @@ end)
 
 lib.callback.register('ox_inventory:getItemCount', function(source, item, metadata, target)
 	local inventory = target and Inventory(target) or Inventory(source)
-	return (inventory and Inventory.GetItem(inventory, item, metadata, true)) or 0
+	return (inventory and Inventory.GetItemCount(inventory, item, metadata, true))
 end)
 
 lib.callback.register('ox_inventory:getInventory', function(source, id)
@@ -287,10 +387,10 @@ end)
 ---@param slot number?
 ---@param metadata { [string]: any }?
 ---@return table | boolean | nil
-lib.callback.register('ox_inventory:useItem', function(source, itemName, slot, metadata)
-	local inventory = Inventory(source) --[[@as OxInventory]]
+lib.callback.register('ox_inventory:useItem', function(source, itemName, slot, metadata, noAnim)
+	local inventory = Inventory(source)
 
-	if inventory.player then
+	if inventory and inventory.player then
 		local item = Items(itemName)
 		local data = item and (slot and inventory.items[slot] or Inventory.GetSlotWithItem(inventory, item.name, metadata, true))
 
@@ -355,7 +455,7 @@ lib.callback.register('ox_inventory:useItem', function(source, itemName, slot, m
 				end
 			elseif not item.weapon and server.UseItem then
                 inventory.usingItem = data
-				-- This is used to call an external useItem function, i.e. ESX.UseItem / QBCore.Functions.CanUseItem
+				-- This is used to call an external useItem function, i.e. ESX.UseItem
 				-- If an error is being thrown on item use there is no internal solution. We previously kept a list
 				-- of usable items which led to issues when restarting resources (for obvious reasons), but config
 				-- developers complained the inventory broke their items. Safely invoking registered item callbacks
@@ -365,8 +465,15 @@ lib.callback.register('ox_inventory:useItem', function(source, itemName, slot, m
 
 			data.consume = consume
 
+            if not TriggerEventHooks('usingItem', {
+				source = source,
+                inventoryId = inventory and inventory.id,
+                item = inventory.items[slot],
+                consume = consume
+			}) then return false end
+
             ---@type boolean
-			local success = lib.callback.await('ox_inventory:usingItem', source, data)
+			local success = lib.callback.await('ox_inventory:usingItem', source, data, noAnim)
 
 			if item.weapon then
 				inventory.weapon = success and slot or nil
@@ -448,7 +555,7 @@ RegisterCommand('convertinventory', function(source, args)
 	local convert = arg and conversionScript[arg]
 
 	if not convert then
-		return warn('Invalid conversion argument. Valid options: esx, esxproperty, qb, linden')
+		return warn('Invalid conversion argument. Valid options: esx, esxproperty')
 	end
 
 	CreateThread(convert)
@@ -469,7 +576,8 @@ lib.addCommand({'additem', 'giveitem'}, {
 
 	if item then
 		local inventory = Inventory(args.target) --[[@as OxInventory]]
-		local count = args.count or 1
+		local count = args.count and math.max(args.count, 1) or 1
+
 		local success, response = Inventory.AddItem(inventory, item.name, count, args.type and { type = tonumber(args.type) or args.type })
 
 		if not success then
@@ -489,25 +597,27 @@ lib.addCommand('removeitem', {
 	params = {
 		{ name = 'target', type = 'playerId', help = 'The player to remove the item from' },
 		{ name = 'item', type = 'string', help = 'The name of the item' },
-		{ name = 'count', type = 'number', help = 'The amount of the item to take' },
+		{ name = 'count', type = 'number', help = 'The amount of the item to take', optional = true },
 		{ name = 'type', help = 'Only remove items with a matching metadata "type"', optional = true },
 	},
 	restricted = 'group.admin',
 }, function(source, args)
 	local item = Items(args.item)
 
-	if item and args.count > 0 then
+	if item then
 		local inventory = Inventory(args.target) --[[@as OxInventory]]
-		local success, response = Inventory.RemoveItem(inventory, item.name, args.count, args.type and { type = tonumber(args.type) or args.type }, nil, true)
+		local count = args.count and math.max(args.count, 1) or 1
+
+		local success, response = Inventory.RemoveItem(inventory, item.name, count, args.type and { type = tonumber(args.type) or args.type }, nil, true)
 
 		if not success then
-			return Citizen.Trace(('Failed to remove %sx %s from player %s (%s)'):format(args.count, item.name, args.target, response))
+			return Citizen.Trace(('Failed to remove %sx %s from player %s (%s)'):format(count, item.name, args.target, response))
 		end
 
 		source = Inventory(source) or {label = 'console', owner = 'console'}
 
 		if server.loglevel > 0 then
-			lib.logger(source.owner, 'admin', ('"%s" removed %sx %s from "%s"'):format(source.label, args.count, item.name, inventory.label))
+			lib.logger(source.owner, 'admin', ('"%s" removed %sx %s from "%s"'):format(source.label, count, item.name, inventory.label))
 		end
 	end
 end)
@@ -526,16 +636,18 @@ lib.addCommand('setitem', {
 
 	if item then
 		local inventory = Inventory(args.target) --[[@as OxInventory]]
-		local success, response = Inventory.SetItem(inventory, item.name, args.count or 0, args.type and { type = tonumber(args.type) or args.type })
+		local count = args.count and math.max(args.count, 0) or 0
+
+		local success, response = Inventory.SetItem(inventory, item.name, count or 0, args.type and { type = tonumber(args.type) or args.type })
 
 		if not success then
-			return Citizen.Trace(('Failed to set %s count to %sx for player %s (%s)'):format(item.name, args.count, args.target, response))
+			return Citizen.Trace(('Failed to set %s count to %sx for player %s (%s)'):format(item.name, count, args.target, response))
 		end
 
 		source = Inventory(source) or {label = 'console', owner = 'console'}
 
 		if server.loglevel > 0 then
-			lib.logger(source.owner, 'admin', ('"%s" set "%s" %s count to %sx'):format(source.label, inventory.label, item.name, args.count))
+			lib.logger(source.owner, 'admin', ('"%s" set "%s" %s count to %sx'):format(source.label, inventory.label, item.name, count))
 		end
 	end
 end)
@@ -549,6 +661,8 @@ lib.addCommand('clearevidence', {
 	if not server.isPlayerBoss then return end
 
 	local inventory = Inventory(source)
+	if not inventory then return end
+
 	local group, grade = server.hasGroup(inventory, shared.police)
 	local hasPermission = group and server.isPlayerBoss(source, group, grade)
 
@@ -605,134 +719,4 @@ lib.addCommand('viewinv', {
 	restricted = 'group.admin',
 }, function(source, args)
 	Inventory.InspectInventory(source, tonumber(args.invId) or args.invId)
-end)
-
-
--------------------------------------------------------------------------------
--- SISTEM LOG DISCORD (DROP, PICKUP, GIVE, STASH)
--- Taruh kode ini di bagian paling bawah server.lua
--------------------------------------------------------------------------------
-
--- [[ 1. KONFIGURASI WEBHOOK ]] --
--- Isi URL Webhook sesuai dengan channel Discord Anda
-local Webhooks = {
-    drop   = "MASUKAN_WEBHOOK_CHANNEL_DROP_DISINI",
-    pickup = "MASUKAN_WEBHOOK_CHANNEL_PICKUP_DISINI",
-    give   = "MASUKAN_WEBHOOK_CHANNEL_GIVE_DISINI",
-    stash  = "MASUKAN_WEBHOOK_CHANNEL_STASH_DISINI" -- (Trunk, Glovebox, Stash, Safe, dll)
-}
-
-local botName = "Inventory Logger"
-local serverName = "Server Roleplay"
--- Link gambar item (Default: GitHub Ox Inventory). 
--- Jika pakai gambar custom, ganti link ini ke hosting gambar Anda.
-local imageBaseUrl = "https://raw.githubusercontent.com/overextended/ox_inventory/web/images/"
-
--- Fungsi Pengirim Log
-local function SendDiscordLog(type, title, description, itemName, color)
-    local webhookLink = Webhooks[type]
-    
-    if not webhookLink or webhookLink:find("MASUKAN_WEBHOOK") then return end
-
-    local embed = {
-        {
-            ["color"] = color,
-            ["title"] = "**"..title.."**",
-            ["description"] = description,
-            ["footer"] = {
-                ["text"] = serverName .. " • " .. os.date("%Y-%m-%d %H:%M:%S"),
-            },
-            ["thumbnail"] = {
-                ["url"] = imageBaseUrl .. itemName .. ".png",
-            }
-        }
-    }
-
-    PerformHttpRequest(webhookLink, function(err, text, headers) end, 'POST', json.encode({username = botName, embeds = embed}), { ['Content-Type'] = 'application/json' })
-end
-
--- [[ 2. HANDLER UTAMA (DROP, PICKUP, STASH) ]] --
--- Menggunakan hook 'swapItems' untuk mendeteksi perpindahan barang
-exports('registerHook', 'swapItems', function(payload)
-    -- Ambil data penting dari payload
-    local source = payload.source
-    local item = payload.fromSlot
-    local count = payload.count
-    local itemName = item.name
-    local itemLabel = item.label
-    local playerName = GetPlayerName(source)
-    local playerID = source
-    local coords = GetEntityCoords(GetPlayerPed(source))
-    local locStr = string.format("`%s, %s, %s`", math.floor(coords.x), math.floor(coords.y), math.floor(coords.z))
-
-    -- A. LOG DROP (Membuang Barang)
-    if payload.toType == 'drop' or payload.toType == 'newdrop' then
-        local desc = string.format(
-            "**Player:** %s (ID: %s)\n**Action:** Membuang Barang (Drop)\n**Item:** %s\n**Jumlah:** x%s\n**Lokasi:** %s",
-            playerName, playerID, itemLabel, count, locStr
-        )
-        SendDiscordLog("drop", "Item Dropped", desc, itemName, 15158332) -- Merah
-
-    -- B. LOG PICKUP (Mengambil Barang dari tanah)
-    elseif payload.fromType == 'drop' then
-        -- Note: Saat pickup, payload.fromSlot mungkin berbeda struktur, kita ambil item dari inventory player (toSlot)
-        local pickedItem = payload.toSlot -- Item yang masuk ke inventory
-        -- Jika pickedItem nil (kadang terjadi di swap), pakai data fromSlot
-        local pName = pickedItem and pickedItem.name or itemName
-        local pLabel = pickedItem and pickedItem.label or itemLabel
-
-        local desc = string.format(
-            "**Player:** %s (ID: %s)\n**Action:** Memungut Barang (Pickup)\n**Item:** %s\n**Jumlah:** x%s\n**Lokasi:** %s",
-            playerName, playerID, pLabel, count, locStr
-        )
-        SendDiscordLog("pickup", "Item Picked Up", desc, pName, 3066993) -- Hijau
-
-    -- C. LOG STASH (Masuk/Keluar Trunk, Glovebox, Stash, dll)
-    -- Jika salah satu tipe BUKAN player dan BUKAN drop, berarti itu penyimpanan (Stash)
-    elseif (payload.toType ~= 'player' and payload.toType ~= 'drop') or (payload.fromType ~= 'player' and payload.fromType ~= 'drop') then
-        
-        local action = ""
-        local storageName = ""
-
-        if payload.toType ~= 'player' then
-            -- Player MENARUH barang ke Stash
-            action = "Menyimpan (Deposit)"
-            storageName = payload.toType .. " (" .. (payload.toInventory or "unknown") .. ")"
-        else
-            -- Player MENGAMBIL barang dari Stash
-            action = "Mengambil (Withdraw)"
-            storageName = payload.fromType .. " (" .. (payload.fromInventory or "unknown") .. ")"
-        end
-
-        local desc = string.format(
-            "**Player:** %s (ID: %s)\n**Action:** %s\n**Storage:** `%s`\n**Item:** %s\n**Jumlah:** x%s\n**Lokasi:** %s",
-            playerName, playerID, action, storageName, itemLabel, count, locStr
-        )
-        
-        SendDiscordLog("stash", "Stash Activity", desc, itemName, 16776960) -- Kuning
-    end
-
-    return true
-end, {})
-
--- [[ 3. HANDLER GIVE (Memberi Barang ke Orang Lain) ]] --
--- Event khusus saat player menggunakan fitur Give
-RegisterNetEvent('ox_inventory:giveItem', function(slotId, targetId, count)
-    local source = source
-    local item = Inventory.GetItem(source, slotId)
-
-    if item then
-        local senderName = GetPlayerName(source)
-        local targetName = GetPlayerName(targetId)
-        local finalCount = count or item.count
-        local itemName = item.name
-        local itemLabel = item.label
-
-        local desc = string.format(
-            "**Pengirim:** %s (ID: %s)\n**Penerima:** %s (ID: %s)\n**Item:** %s\n**Jumlah:** x%s",
-            senderName, source, targetName, targetId, itemLabel, finalCount
-        )
-
-        SendDiscordLog("give", "Item Given to Player", desc, itemName, 10181046) -- Ungu
-    end
 end)
