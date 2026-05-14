@@ -102,6 +102,7 @@ const InventorySlot: React.ForwardRefRenderFunction<HTMLDivElement, SlotProps> =
 
   const handleContext = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
+    dispatch(closeTooltip());
     if (inventoryType !== 'player' || !isSlotWithItem(item)) return;
 
     dispatch(openContextMenu({ item, coords: { x: event.clientX, y: event.clientY } }));
@@ -131,97 +132,106 @@ const InventorySlot: React.ForwardRefRenderFunction<HTMLDivElement, SlotProps> =
             ? 'brightness(80%) grayscale(100%)'
             : undefined,
         opacity: isDragging ? 0.4 : 1.0,
-        backgroundImage: `url(${item?.name ? getItemUrl(item as SlotWithItem) : 'none'}`,
         border: isOver ? '1px dashed rgba(255,255,255,0.4)' : '',
       }}
     >
+      {/* LAPISAN 1: ANGKA SLOT (PALING BELAKANG) */}
+      {inventoryType === 'player' && item.slot <= 5 && (
+        <div className="inventory-slot-number">{item.slot}</div>
+      )}
+
       {isSlotWithItem(item) && (
-        <div
-          className="item-slot-wrapper"
-          onMouseEnter={() => {
-            timerRef.current = window.setTimeout(() => {
-              dispatch(openTooltip({ item, inventoryType }));
-            }, 500) as unknown as number;
-          }}
-          onMouseLeave={() => {
-            dispatch(closeTooltip());
-            if (timerRef.current) {
-              clearTimeout(timerRef.current);
-              timerRef.current = null;
-            }
-          }}
-        >
-          {/* BAGIAN ATAS: HANYA QUANTITY */}
+        <>
+          {/* LAPISAN 2: GAMBAR BARANG (DI DEPAN ANGKA) */}
+          <div 
+            className="item-slot-image" 
+            style={{ backgroundImage: `url(${getItemUrl(item) || 'none'})` }}
+          />
+
+          {/* LAPISAN 3: INFORMASI TEXT (LABEL, BERAT, DLL) */}
           <div
-            className={
-              inventoryType === 'player' && item.slot <= 5 ? 'item-hotslot-header-wrapper' : 'item-slot-header-wrapper'
-            }
+            className="item-slot-wrapper"
+            onMouseEnter={() => {
+              timerRef.current = window.setTimeout(() => {
+                dispatch(openTooltip({ item, inventoryType }));
+              }, 500) as unknown as number;
+            }}
+            onMouseLeave={() => {
+              dispatch(closeTooltip());
+              if (timerRef.current) {
+                clearTimeout(timerRef.current);
+                timerRef.current = null;
+              }
+            }}
           >
-            {inventoryType === 'player' && item.slot <= 5 && <div className="inventory-slot-number">{item.slot}</div>}
-            
-            <div className="item-slot-info-wrapper">
-              {item.count > 0 && <p>{item.count.toLocaleString('en-us')}x</p>}
-            </div>
-          </div>
-
-          {/* BAGIAN BAWAH: BERAT -> BAR -> LABEL */}
-          <div>
-            {item.weight > 0 && (
-              <div className="item-slot-weight-wrapper">
-                <p>
-                  {item.weight >= 1000
-                    ? `${(item.weight / 1000).toLocaleString('en-us', { minimumFractionDigits: 2 })}kg`
-                    : `${item.weight.toLocaleString('en-us', { minimumFractionDigits: 0 })}g`}
-                </p>
-              </div>
-            )}
-
-            {inventoryType !== 'shop' && item?.durability !== undefined && (
-              <WeightBar percent={item.durability} durability />
-            )}
-            
-            {inventoryType === 'shop' && item?.price !== undefined && (
-              <>
-                {item?.currency !== 'money' && item.currency !== 'black_money' && item.price > 0 && item.currency ? (
-                  <div className="item-slot-currency-wrapper">
-                    <img
-                      src={item.currency ? getItemUrl(item.currency) : 'none'}
-                      alt="item-image"
-                      style={{
-                        imageRendering: '-webkit-optimize-contrast',
-                        height: 'auto',
-                        width: '2vh',
-                        backfaceVisibility: 'hidden',
-                        transform: 'translateZ(0)',
-                      }}
-                    />
-                    <p>{item.price.toLocaleString('en-us')}</p>
-                  </div>
-                ) : (
-                  <>
-                    {item.price > 0 && (
-                      <div
-                        className="item-slot-price-wrapper"
-                        style={{ color: item.currency === 'money' || !item.currency ? '#2ECC71' : '#E74C3C' }}
-                      >
-                        <p>
-                          {Locale.$ || '$'}
-                          {item.price.toLocaleString('en-us')}
-                        </p>
-                      </div>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-            
-            <div className="inventory-slot-label-box">
-              <div className="inventory-slot-label-text">
-                {item.metadata?.label ? item.metadata.label : Items[item.name]?.label || item.name}
+            <div
+              className={
+                inventoryType === 'player' && item.slot <= 5 ? 'item-hotslot-header-wrapper' : 'item-slot-header-wrapper'
+              }
+            >
+              <div className="item-slot-info-wrapper">
+                {item.count > 0 && <p>{item.count.toLocaleString('en-us')}x</p>}
               </div>
             </div>
+
+            <div>
+              {item.weight > 0 && (
+                <div className="item-slot-weight-wrapper">
+                  <p>
+                    {item.weight >= 1000
+                      ? `${(item.weight / 1000).toLocaleString('en-us', { minimumFractionDigits: 2 })}kg`
+                      : `${item.weight.toLocaleString('en-us', { minimumFractionDigits: 0 })}g`}
+                  </p>
+                </div>
+              )}
+
+              {inventoryType !== 'shop' && item?.durability !== undefined && (
+                <WeightBar percent={item.durability} durability />
+              )}
+              
+              {inventoryType === 'shop' && item?.price !== undefined && (
+                <>
+                  {item?.currency !== 'money' && item.currency !== 'black_money' && item.price > 0 && item.currency ? (
+                    <div className="item-slot-currency-wrapper">
+                      <img
+                        src={item.currency ? getItemUrl(item.currency) : 'none'}
+                        alt="item-image"
+                        style={{
+                          imageRendering: '-webkit-optimize-contrast',
+                          height: 'auto',
+                          width: '2vh',
+                          backfaceVisibility: 'hidden',
+                          transform: 'translateZ(0)',
+                        }}
+                      />
+                      <p>{item.price.toLocaleString('en-us')}</p>
+                    </div>
+                  ) : (
+                    <>
+                      {item.price > 0 && (
+                        <div
+                          className="item-slot-price-wrapper"
+                          style={{ color: item.currency === 'money' || !item.currency ? '#2ECC71' : '#E74C3C' }}
+                        >
+                          <p>
+                            {Locale.$ || '$'}
+                            {item.price.toLocaleString('en-us')}
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+              
+              <div className="inventory-slot-label-box">
+                <div className="inventory-slot-label-text">
+                  {item.metadata?.label ? item.metadata.label : Items[item.name]?.label || item.name}
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );

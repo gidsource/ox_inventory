@@ -12,8 +12,9 @@ const InventoryHotbar: React.FC = () => {
   const [hotbarVisible, setHotbarVisible] = useState(false);
   const items = useAppSelector(selectLeftInventory).items.slice(0, 5);
 
-  //stupid fix for timeout
-  const [handle, setHandle] = useState<NodeJS.Timeout>();
+  // FIX: Mengganti NodeJS.Timeout dengan ReturnType<typeof setTimeout>
+  const [handle, setHandle] = useState<ReturnType<typeof setTimeout>>();
+  
   useNuiEvent('toggleHotbar', () => {
     if (hotbarVisible) {
       setHotbarVisible(false);
@@ -28,41 +29,48 @@ const InventoryHotbar: React.FC = () => {
     <SlideUp in={hotbarVisible}>
       <div className="hotbar-container">
         {items.map((item) => (
-          <div
-            className="hotbar-item-slot"
-            style={{
-              backgroundImage: `url(${item?.name ? getItemUrl(item as SlotWithItem) : 'none'}`,
-            }}
-            key={`hotbar-${item.slot}`}
-          >
+          <div className="hotbar-item-slot" key={`hotbar-${item.slot}`}>
+            
+            {/* LAPISAN 1: ANGKA SLOT SELALU MUNCUL DI BELAKANG */}
+            <div className="inventory-slot-number">{item.slot}</div>
+
             {isSlotWithItem(item) && (
-              <div className="item-slot-wrapper">
-                <div className="hotbar-slot-header-wrapper">
-                  <div className="inventory-slot-number">{item.slot}</div>
-                  <div className="item-slot-info-wrapper">
-                    <p>
-                      {item.weight > 0
-                        ? item.weight >= 1000
-                          ? `${(item.weight / 1000).toLocaleString('en-us', {
-                              minimumFractionDigits: 2,
-                            })}kg `
-                          : `${item.weight.toLocaleString('en-us', {
-                              minimumFractionDigits: 0,
-                            })}g `
-                        : ''}
-                    </p>
-                    <p>{item.count ? item.count.toLocaleString('en-us') + `x` : ''}</p>
+              <>
+                {/* LAPISAN 2: GAMBAR BARANG (DENGAN FORMAT URL YANG SUDAH DIPERBAIKI AGAR TIDAK FLICKER) */}
+                <div 
+                  className="item-slot-image" 
+                  style={{ backgroundImage: `url(${getItemUrl(item as SlotWithItem) || 'none'})` }}
+                />
+
+                {/* LAPISAN 3: INFORMASI TEKS */}
+                <div className="item-slot-wrapper">
+                  <div className="item-hotslot-header-wrapper">
+                    <div className="item-slot-info-wrapper">
+                      {item.weight > 0 && (
+                        <p>
+                          {item.weight >= 1000
+                            ? `${(item.weight / 1000).toLocaleString('en-us', {
+                                minimumFractionDigits: 2,
+                              })}kg `
+                            : `${item.weight.toLocaleString('en-us', {
+                                minimumFractionDigits: 0,
+                              })}g `}
+                        </p>
+                      )}
+                      {item.count > 0 && <p>{item.count.toLocaleString('en-us')}x</p>}
+                    </div>
                   </div>
-                </div>
-                <div>
-                  {item?.durability !== undefined && <WeightBar percent={item.durability} durability />}
-                  <div className="inventory-slot-label-box">
-                    <div className="inventory-slot-label-text">
-                      {item.metadata?.label ? item.metadata.label : Items[item.name]?.label || item.name}
+                  
+                  <div>
+                    {item?.durability !== undefined && <WeightBar percent={item.durability} durability />}
+                    <div className="inventory-slot-label-box">
+                      <div className="inventory-slot-label-text">
+                        {item.metadata?.label ? item.metadata.label : Items[item.name]?.label || item.name}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
+              </>
             )}
           </div>
         ))}

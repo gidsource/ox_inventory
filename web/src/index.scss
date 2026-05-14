@@ -68,6 +68,7 @@ input[type='number']::-webkit-outer-spin-button {
   outline: none;
   display: flex;
   flex-direction: column;
+  z-index: 10000 !important; /* HARUS LEBIH TINGGI DARI TOOLTIP */
 }
 
 .context-menu-item {
@@ -335,24 +336,43 @@ button:active {
 
 .inventory-slot-number {
   position: absolute;
-  color: #000;
+  color: #ffffff; 
   font-size: 8vh;
   left: 0;
   right: 0;
   margin-left: auto;
   margin-right: auto;
   margin-top: 1vh;
-  opacity: 0.15;
+  opacity: 0.3; // Sesuaikan transparansi angka agar tidak terlalu mencolok
   font-weight: 300;
   text-align: center;
   font-family: 'Bebas Neue', sans-serif;
+  z-index: 1; // Lapisan bawah
+  pointer-events: none;
+}
+
+
+.item-slot-image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 7vh;
+  image-rendering: -webkit-optimize-contrast;
+  z-index: 2; // Berada di depan angka
+  pointer-events: none;
 }
 
 .item-slot-wrapper {
+  position: relative;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   height: 100%;
+  z-index: 3; // Paling depan
   p {
     font-size: 12px;
   }
@@ -417,6 +437,7 @@ button:active {
   border-color: rgba(0, 0, 0, 0.2);
   border-style: inset;
   border-width: 1px;
+  z-index: 9990 !important; /* LEBIH RENDAH DARI CONTEXT MENU */
   p {
     font-size: 12px;
     font-weight: 400;
@@ -619,5 +640,7 @@ button:active {
   .inventory-slot {
     width: 11.4797vh;
     height: 11.4797vh;
+    background-image: none !important; // Hapus latar belakang bawaan
+    position: relative;
   }
 }

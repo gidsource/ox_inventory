@@ -212,7 +212,8 @@ export const MenuComponent = React.forwardRef<HTMLButtonElement, MenuProps & Rea
           <FloatingList elementsRef={elementsRef} labelsRef={labelsRef}>
             {isMounted && (
               <FloatingPortal>
-                <FloatingOverlay lockScroll>
+                {/* --- TAMBAHKAN style={{ zIndex: 9999 }} DI BARIS INI --- */}
+                <FloatingOverlay lockScroll style={{ zIndex: 9999 }}>
                   <FloatingFocusManager context={context} modal={true} initialFocus={refs.floating}>
                     <div
                       ref={refs.setFloating}
